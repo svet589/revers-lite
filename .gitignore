@@ -1,0 +1,31 @@
+# Android
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/app/release/
+android/local.properties
+android/keystore.jks
+android/*.iml
+android/captures/
+android/.cxx/
+
+# Server
+server/node_modules/
+server/data/
+server/.env
+server/*.log
+server/*.pid
+server/npm-debug.log*
+
+# General
+.DS_Store
+*.tmp
+*.swp
+*.log
+.env
+*.db
+*.db-journal
+Thumbs.db
+.idea/
+.vscode/
