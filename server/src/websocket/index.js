@@ -7,7 +7,7 @@ module.exports = (io, db) => {
 
         let currentUserId = null;
 
-        socket.on('register', (data) => {
+        socket.on('register', async (data) => {
             const { userId, publicKey, name, avatar } = data;
 
             if (!userId) {
@@ -17,16 +17,17 @@ module.exports = (io, db) => {
 
             currentUserId = userId;
 
-            const stmt = db.prepare(
-                `INSERT OR REPLACE INTO users (id, public_key, name, avatar, last_seen)
-                 VALUES (?, ?, ?, ?, ?)`
-            );
-            stmt.run(userId, publicKey || '', name || 'User', avatar || '', Date.now(), (err) => {
-                stmt.finalize();
-                if (err) {
-                    console.error('Ошибка регистрации в БД:', err);
-                }
-            });
+            try {
+                await db.run(
+                    `INSERT INTO users (id, public_key, name, avatar, last_seen)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (id) DO UPDATE SET
+                     public_key = $2, name = $3, avatar = $4, last_seen = $5`,
+                    [userId, publicKey || '', name || 'User', avatar || '', Date.now()]
+                );
+            } catch (err) {
+                console.error('Ошибка регистрации в БД:', err);
+            }
 
             onlineUsers.set(userId, socket.id);
             userSockets.set(socket.id, userId);
@@ -40,7 +41,7 @@ module.exports = (io, db) => {
             });
         });
 
-        socket.on('send_message', (data) => {
+        socket.on('send_message', async (data) => {
             const { chatId, ciphertext, replyToId } = data;
 
             if (!chatId || !ciphertext) {
@@ -54,21 +55,15 @@ module.exports = (io, db) => {
                 return;
             }
 
-            const stmt = db.prepare(
-                `INSERT INTO messages (chat_id, sender_id, ciphertext, timestamp, reply_to_id)
-                 VALUES (?, ?, ?, ?, ?)`
-            );
+            try {
+                const result = await db.run(
+                    `INSERT INTO messages (chat_id, sender_id, ciphertext, timestamp, reply_to_id)
+                     VALUES ($1, $2, $3, $4, $5)
+                     RETURNING id`,
+                    [chatId, senderId, ciphertext, Date.now(), replyToId || null]
+                );
 
-            stmt.run(chatId, senderId, ciphertext, Date.now(), replyToId || null, function(err) {
-                stmt.finalize();
-
-                if (err) {
-                    console.error('Ошибка сохранения:', err);
-                    socket.emit('error', { message: 'Не удалось сохранить сообщение' });
-                    return;
-                }
-
-                const messageId = this.lastID;
+                const messageId = result.rows[0].id;
 
                 let recipientId = null;
                 if (chatId.includes('_')) {
@@ -96,7 +91,10 @@ module.exports = (io, db) => {
                     id: messageId,
                     timestamp: Date.now()
                 });
-            });
+            } catch (err) {
+                console.error('Ошибка сохранения:', err);
+                socket.emit('error', { message: 'Не удалось сохранить сообщение' });
+            }
         });
 
         socket.on('typing', (data) => {
@@ -121,31 +119,39 @@ module.exports = (io, db) => {
             }
         });
 
-        socket.on('mark_read', (data) => {
+        socket.on('mark_read', async (data) => {
             const { chatId, messageIds } = data;
             const userId = userSockets.get(socket.id);
 
             if (!userId || !chatId || !messageIds?.length) return;
 
-            const placeholders = messageIds.map(() => '?').join(',');
-            db.run(
-                `UPDATE messages SET is_read = 1
-                 WHERE chat_id = ? AND id IN (${placeholders})`,
-                [chatId, ...messageIds],
-                (err) => {
-                    if (err) console.error('Ошибка пометки прочитанных:', err);
-                }
-            );
+            const placeholders = messageIds.map((_, i) => `$${i + 2}`).join(',');
+            try {
+                await db.run(
+                    `UPDATE messages SET is_read = 1
+                     WHERE chat_id = $1 AND id IN (${placeholders})`,
+                    [chatId, ...messageIds]
+                );
+            } catch (err) {
+                console.error('Ошибка пометки прочитанных:', err);
+            }
         });
 
-        socket.on('disconnect', () => {
+        socket.on('disconnect', async () => {
             const userId = userSockets.get(socket.id);
 
             if (userId) {
                 onlineUsers.delete(userId);
                 userSockets.delete(socket.id);
 
-                db.run('UPDATE users SET last_seen = ? WHERE id = ?', [Date.now(), userId]);
+                try {
+                    await db.run(
+                        'UPDATE users SET last_seen = $1 WHERE id = $2',
+                        [Date.now(), userId]
+                    );
+                } catch (err) {
+                    console.error('Ошибка обновления last_seen:', err);
+                }
 
                 socket.broadcast.emit('user_offline', { userId });
 
