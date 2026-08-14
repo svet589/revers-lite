@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: revers-lite-backend
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: cd server && npm install
+    startCommand: cd server && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RENDER
+        value: true
+    disks:
+      - name: revers-sqlite-data
+        mountPath: /data
+        sizeGB: 1
